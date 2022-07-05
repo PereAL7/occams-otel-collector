@@ -17,6 +17,8 @@ package grypereceiver
 import (
 	"context"
 	"fmt"
+	"go.opentelemetry.io/collector/pdata/pcommon"
+	"go.opentelemetry.io/collector/pdata/pmetric"
 	"path"
 	"strings"
 	"time"
@@ -31,7 +33,6 @@ import (
 	"github.com/anchore/syft/syft/pkg/cataloger"
 	"github.com/anchore/syft/syft/source"
 	"go.opentelemetry.io/collector/component"
-	"go.opentelemetry.io/collector/model/pdata"
 	"go.uber.org/zap"
 )
 
@@ -71,11 +72,11 @@ func (g *grypeScraper) Start(ctx context.Context, host component.Host) error {
 	return nil
 }
 
-func (g *grypeScraper) Scrape(ctx context.Context) (pdata.Metrics, error) {
+func (g *grypeScraper) Scrape(ctx context.Context) (pmetric.Metrics, error) {
 
 	if err := g.updateDB(); err != nil {
 		g.logger.Error(err.Error())
-		return pdata.Metrics{}, err
+		return pmetric.Metrics{}, err
 	}
 
 	matches := match.NewMatches()
@@ -90,7 +91,7 @@ func (g *grypeScraper) Scrape(ctx context.Context) (pdata.Metrics, error) {
 		packages, con, err := pkg.Provide(fmt.Sprintf("dir:%v", in), providerConfig)
 		if err != nil {
 			g.logger.Error(err.Error())
-			return pdata.Metrics{}, err
+			return pmetric.Metrics{}, err
 		}
 		matchers := matcher.NewDefaultMatchers(matcher.Config{})
 		allMatches := grype.FindVulnerabilitiesForPackage(g.provider, con.Distro, matchers, packages)
@@ -102,7 +103,7 @@ func (g *grypeScraper) Scrape(ctx context.Context) (pdata.Metrics, error) {
 	for mth := range matches.Enumerate() {
 		if err := g.processMatch(&mth, ilm); err != nil {
 			g.logger.Error(err.Error())
-			return pdata.Metrics{}, err
+			return pmetric.Metrics{}, err
 		}
 	}
 
@@ -121,18 +122,18 @@ func (g *grypeScraper) updateDB() error {
 	return nil
 }
 
-func (g *grypeScraper) processMatch(mth *match.Match, ilm pdata.InstrumentationLibraryMetrics) error {
+func (g *grypeScraper) processMatch(mth *match.Match, ilm pmetric.ScopeMetrics) error {
 	m := ilm.Metrics().AppendEmpty()
 	m.SetName(MetricName)
-	m.SetDataType(pdata.MetricDataTypeSum)
+	m.SetDataType(pmetric.MetricDataTypeSum)
 	m.SetDescription(MetricDesc)
 	m.SetUnit(MetricUnit)
 
 	dp := m.Sum().DataPoints().AppendEmpty()
-	dp.SetTimestamp(pdata.NewTimestampFromTime(time.Now()))
+	dp.SetTimestamp(pcommon.NewTimestampFromTime(time.Now()))
 	dp.SetIntVal(1)
 
-	labels := pdata.NewAttributeMap()
+	labels := pcommon.NewMap()
 	g.copyMatchToLabels(mth, &labels)
 
 	metadata, err := g.getMetadata(mth.Vulnerability.ID, mth.Vulnerability.Namespace)
@@ -166,36 +167,36 @@ func (g *grypeScraper) getLocations(locs []source.Location) []string {
 	return locations
 }
 
-func (g *grypeScraper) newMetric() (pdata.Metrics, pdata.InstrumentationLibraryMetrics) {
-	md := pdata.NewMetrics()
-	ilm := md.ResourceMetrics().AppendEmpty().InstrumentationLibraryMetrics().AppendEmpty()
-	ilm.InstrumentationLibrary().SetName(ILName)
-	ilm.InstrumentationLibrary().SetVersion(Version)
+func (g *grypeScraper) newMetric() (pmetric.Metrics, pmetric.ScopeMetrics) {
+	md := pmetric.NewMetrics()
+	ilm := md.ResourceMetrics().AppendEmpty().ScopeMetrics().AppendEmpty()
+	ilm.Scope().SetName(ILName)
+	ilm.Scope().SetVersion(Version)
 	return md, ilm
 }
 
 func (g *grypeScraper) copyMetadataToLabels(
 	meta *vulnerability.Metadata,
-	labels *pdata.AttributeMap,
+	labels *pcommon.Map,
 ) {
-	labels.Insert("vulnerability.severity", pdata.NewAttributeValueString(strings.ToLower(meta.Severity)))
-	labels.Insert("vulnerability.data_source", pdata.NewAttributeValueString(meta.DataSource))
-	labels.Insert("vulnerability.namespace", pdata.NewAttributeValueString(meta.Namespace))
-	labels.Insert("vulnerability.description", pdata.NewAttributeValueString(meta.Description))
+	labels.Insert("vulnerability.severity", pcommon.NewValueString(strings.ToLower(meta.Severity)))
+	labels.Insert("vulnerability.data_source", pcommon.NewValueString(meta.DataSource))
+	labels.Insert("vulnerability.namespace", pcommon.NewValueString(meta.Namespace))
+	labels.Insert("vulnerability.description", pcommon.NewValueString(meta.Description))
 }
 
 func (g *grypeScraper) copyMatchToLabels(
 	match *match.Match,
-	labels *pdata.AttributeMap,
+	labels *pcommon.Map,
 ) {
-	labels.Insert("package.id", pdata.NewAttributeValueString(string(match.Package.ID)))
-	labels.Insert("package.name", pdata.NewAttributeValueString(match.Package.Name))
-	labels.Insert("package.version", pdata.NewAttributeValueString(match.Package.Version))
-	labels.Insert("package.language", pdata.NewAttributeValueString(match.Package.Language.String()))
-	labels.Insert("package.licences", pdata.NewAttributeValueString(strings.Join(match.Package.Licenses, ",")))
-	labels.Insert("package.purl", pdata.NewAttributeValueString(match.Package.PURL))
-	labels.Insert("package.type", pdata.NewAttributeValueString(match.Package.Type.PackageURLType()))
-	labels.Insert("package.locations", pdata.NewAttributeValueString(strings.Join(g.getLocations(match.Package.Locations.ToSlice()), ",")))
-	labels.Insert("vulnerability.id", pdata.NewAttributeValueString(match.Vulnerability.ID))
-	labels.Insert("vulnerability.namespace", pdata.NewAttributeValueString(match.Vulnerability.Namespace))
+	labels.Insert("package.id", pcommon.NewValueString(string(match.Package.ID)))
+	labels.Insert("package.name", pcommon.NewValueString(match.Package.Name))
+	labels.Insert("package.version", pcommon.NewValueString(match.Package.Version))
+	labels.Insert("package.language", pcommon.NewValueString(match.Package.Language.String()))
+	labels.Insert("package.licences", pcommon.NewValueString(strings.Join(match.Package.Licenses, ",")))
+	labels.Insert("package.purl", pcommon.NewValueString(match.Package.PURL))
+	labels.Insert("package.type", pcommon.NewValueString(match.Package.Type.PackageURLType()))
+	labels.Insert("package.locations", pcommon.NewValueString(strings.Join(g.getLocations(match.Package.Locations.ToSlice()), ",")))
+	labels.Insert("vulnerability.id", pcommon.NewValueString(match.Vulnerability.ID))
+	labels.Insert("vulnerability.namespace", pcommon.NewValueString(match.Vulnerability.Namespace))
 }
