@@ -28,6 +28,7 @@ import (
 	"github.com/anchore/grype/grype/match"
 	"github.com/anchore/grype/grype/matcher"
 	"github.com/anchore/grype/grype/pkg"
+	"github.com/anchore/grype/grype/store"
 	"github.com/anchore/grype/grype/vulnerability"
 	"github.com/anchore/stereoscope/pkg/image"
 	"github.com/anchore/syft/syft/pkg/cataloger"
@@ -49,7 +50,7 @@ const (
 type grypeScraper struct {
 	logger           *zap.Logger
 	cfg              *Config
-	provider         vulnerability.Provider
+	store            store.Store
 	metadataProvider vulnerability.MetadataProvider
 	status           *db.Status
 	dbConf           db.Config
@@ -94,7 +95,7 @@ func (g *grypeScraper) Scrape(ctx context.Context) (pmetric.Metrics, error) {
 			return pmetric.Metrics{}, err
 		}
 		matchers := matcher.NewDefaultMatchers(matcher.Config{})
-		allMatches := grype.FindVulnerabilitiesForPackage(g.provider, con.Distro, matchers, packages)
+		allMatches := grype.FindVulnerabilitiesForPackage(g.store, con.Distro, matchers, packages)
 		g.logger.Info(fmt.Sprintf("Found %v vulnerabilities in dir:%v", allMatches.Count(), in))
 		matches.Merge(allMatches)
 	}
@@ -111,13 +112,13 @@ func (g *grypeScraper) Scrape(ctx context.Context) (pmetric.Metrics, error) {
 }
 
 func (g *grypeScraper) updateDB() error {
-	provider, metadataProvider, dbStatus, err := grype.LoadVulnerabilityDB(g.dbConf, true)
+	dbStore, dbStatus, err := grype.LoadVulnerabilityDB(g.dbConf, true)
 	if err != nil {
 		g.logger.Error(err.Error())
 		return err
 	}
-	g.provider = provider
-	g.metadataProvider = metadataProvider
+	g.store = *dbStore
+	g.metadataProvider = dbStore.MetadataProvider
 	g.status = dbStatus
 	return nil
 }
